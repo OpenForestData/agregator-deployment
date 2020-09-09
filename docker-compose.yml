@@ -1,0 +1,203 @@
+version: "3.7"
+services:
+
+    ofdAgregatorTraefik:
+        image: "traefik:v2.2"
+        container_name: "ofdAgregatorTraefik"
+        command:
+            - "--providers.docker=true"
+            - "--providers.docker.exposedbydefault=true"
+            - "--entrypoints.web.address=:80"
+            - "--entrypoints.web.forwardedheaders.insecure"
+            - "--entrypoints.web.proxyprotocol.insecure"
+        volumes:
+            - "/var/run/docker.sock:/var/run/docker.sock:ro"
+        ports:
+            - "80:80"
+        networks:
+            - ofd_agregator_network
+        restart: unless-stopped
+
+    ofdAgregatorCMSPsql:
+        image: "postgres:12-alpine"
+        container_name: "ofdAgregatorCMSPsql"
+        environment:
+            - POSTGRES_USER=agregatorcmsusr
+            - POSTGRES_PASSWORD=PasswordHere123
+            - POSTGRES_DB=agregatorcms
+        volumes:
+            - ofd_agregator_cms_psql:/var/lib/postgres
+        networks:
+            - ofd_agregator_network
+        restart: unless-stopped
+
+    ofdAgregatorRedis:
+        image: "bitnami/redis:6.0"
+        container_name: "ofdAgregatorRedis"
+        environment:
+            - REDIS_PASSWORD=redis_password_here
+        volumes:
+            - ofd_agregator_redis:/bitnami/redis/data
+        networks:
+            - ofd_agregator_network
+        restart: unless-stopped
+
+    ofdAgregatorRedisFiveStar:
+        image: "bitnami/redis:6.0"
+        container_name: "ofdAgregatorRedisFiveStar"
+        environment:
+            - REDIS_PASSWORD=redisfivestar_password_here
+        volumes:
+            - ofd_agregator_redis_fivestar:/bitnami/redis/data
+        networks:
+            - ofd_agregator_network
+        restart: unless-stopped
+
+    odfAgregatorImgproxy:
+        image: darthsim/imgproxy:latest
+        container_name: "odfAgregatorImgproxy"
+        environment: 
+            - IMGPROXY_KEY=imgproxy_key_kere
+            - IMGPROXY_SALT=imgproxy_salt_kere
+            - IMGPROXY_MAX_SRC_RESOLUTION=30
+        networks:
+            - ofd_agregator_network
+        restart: unless-stopped
+
+    odfAgregatorBackendCMS:
+        image: "registry.gitlab.whiteaster.com/openforestdata/agregator/agregator_backend_cms:latest"
+        container_name: "odfAgregatorBackendCMS"
+        environment: 
+            - DB_NAME=agregatorcms
+            - DB_USER=agregatorcmsusr
+            - DB_PASSWORD=PasswordHere123
+            - DB_HOST=ofdAgregatorCMSPsql
+            - DB_PORT=5432
+        labels:
+            - traefik.enable=true
+            - traefik.http.routers.odfAgregatorBackendCMS.rule=Host(`${URL}`) && PathPrefix (`/pl`,`/en`,`/cms-api`,`/api/v1/media-cms`,`/media-cms`)
+            - traefik.http.services.odfAgregatorBackendCMS.loadbalancer.server.port=8000
+            - traefik.http.routers.odfAgregatorBackendCMS.entrypoints=web
+            - traefik.http.middlewares.odfAgregatorBackendCMS.headers.accesscontrolallowmethods=GET,OPTIONS,PUT,POST,DELETE,PATCH
+            - traefik.http.middlewares.odfAgregatorBackendCMS.headers.accesscontrolalloworigin=origin-list-or-null
+            - traefik.http.middlewares.odfAgregatorBackendCMS.headers.accesscontrolmaxage=100
+            - traefik.http.middlewares.odfAgregatorBackendCMS.headers.addvaryheader=true
+        volumes:
+            - ofd_agregator_cms_static:/app/static/
+            - ofd_agregator_cms_media:/app/media/
+        networks:
+            - ofd_agregator_network
+        restart: unless-stopped
+
+    ofdAgregatorBackend:
+        image: "registry.gitlab.whiteaster.com/openforestdata/agregator/agregator:latest"
+        container_name: "ofdAgregatorBackend"
+        environment: 
+            - PRODUCTION=true
+            - BACKEND_CMS_URL=http://odfAgregatorBackendCMS:8000
+            - DATAVERSE_URL=https://data-epuszcza.biaman.pl
+            - SOLR_COLLECTION_URL=http://data-epuszcza.biaman.pl:8983/solr/collection1
+            - DATASET_DETAILS_MAX_RESULTS_AMOUNT=1000
+            - IMG_PROXY_URL=http://odfAgregatorImgproxy:8080
+            - IMG_PROXY_SALT=imgproxy_salt_kere
+            - IMG_PROXY_KEY=imgproxy_key_kere
+            - REDIS_HOST=ofdAgregatorRedis
+            - REDIS_PORT=6379
+            - REDIS_BD=0
+            - REDIS_PASSWORD=redis_password_here
+            - REDIS_EXPIRES_TIME_IN_SECONDS=60
+            - FIVE_STAR_REPOSITORY_URL=http://ofdFiveStarDataverse:8000
+            - RECAPTCHA_SECRET='secret_captcha_here'
+            - EMAIL_HOST='email_host'
+            - EMAIL_HOST_USER='email_host_user'
+            - EMAIL_HOST_PASSWORD='email_password'
+            - EMAIL_PORT=465
+            - EMAIL_USE_TLS=False
+            - EMAIl_USE_SSL=True
+            - DEFAULT_FROM_EMAIL='OFD <email_here>'
+        labels:
+            - traefik.enable=true
+            - traefik.http.routers.ofd_agregator_backend.rule=Host(`${URL}`) && PathPrefix (`/api`)
+            - traefik.http.services.ofd_agregator_backend.loadbalancer.server.port=8000
+            - traefik.http.routers.ofd_agregator_backend.entrypoints=web
+            - traefik.http.middlewares.ofd_agregator_backend.headers.accesscontrolallowmethods=GET,OPTIONS,PUT,POST,DELETE,PATCH
+            - traefik.http.middlewares.ofd_agregator_backend.headers.accesscontrolalloworigin=origin-list-or-null
+            - traefik.http.middlewares.ofd_agregator_backend.headers.accesscontrolmaxage=100
+            - traefik.http.middlewares.ofd_agregator_backend.headers.addvaryheader=true
+        volumes: 
+            - ofd_agregator_backend_statics:/app/static/
+            - ofd_agregator_backend_media:/app/media/
+        networks:
+            - ofd_agregator_network
+        restart: unless-stopped
+
+    ofdFiveStarDataverse:
+        image: "registry.gitlab.whiteaster.com/openforestdata/backend/fivestardataverse:latest"
+        container_name: "ofdFiveStarDataverse"
+        environment: 
+            - PRODUCTION=true
+            - BACKEND_CMS_URL=http://odfAgregatorBackendCMS:8000
+            - DATAVERSE_URL=https://data-epuszcza.biaman.pl
+            - SOLR_COLLECTION_URL=http://data-epuszcza.biaman.pl:8983/solr/collection1
+            - DATASET_DETAILS_MAX_RESULTS_AMOUNT=1000
+            - IMG_PROXY_URL=http://odfAgregatorImgproxy:8080
+            - IMG_PROXY_SALT=imgproxy_salt_kere
+            - IMG_PROXY_KEY=imgproxy_key_kere
+            - REDIS_HOST=ofdAgregatorRedisFiveStar
+            - REDIS_PORT=6379
+            - REDIS_BD=0
+            - REDIS_PASSWORD=redisfivestar_password_here
+            - REDIS_EXPIRES_TIME_IN_SECONDS=60
+            - REFRESH_FIVE_STAR_TIME=60
+        labels:
+            - traefik.enable=true
+            - traefik.http.routers.ofdFiveStarDataverse.rule=Host(`${URL}`) && PathPrefix (`/api-five`)
+            - traefik.http.services.ofdFiveStarDataverse.loadbalancer.server.port=8000
+            - traefik.http.routers.ofdFiveStarDataverse.entrypoints=web
+            - traefik.http.middlewares.ofdFiveStarDataverse.headers.accesscontrolallowmethods=GET,OPTIONS,PUT,POST,DELETE,PATCH
+            - traefik.http.middlewares.ofdFiveStarDataverse.headers.accesscontrolalloworigin=origin-list-or-null
+            - traefik.http.middlewares.ofdFiveStarDataverse.headers.accesscontrolmaxage=100
+            - traefik.http.middlewares.ofdFiveStarDataverse.headers.addvaryheader=true
+        networks:
+            - ofd_agregator_network
+        restart: unless-stopped
+
+    ofdAgregatorFrontend:
+        image: "registry.gitlab.whiteaster.com/openforestdata/agregator/open-forest-data-agregator-frontend:latest"
+        container_name: "ofdAgregatorFrontend"
+        environment: 
+            - PROD=true
+            - HOSTNAME=${http}://${URL}/api/v1/
+            - captcha=frontend_captcha_here
+            - siteURL=${http}://${URL}/
+            - cms=${http}://${URL}/cms-api/v1/
+        labels:
+            - traefik.enable=true
+            - traefik.http.routers.ofd_agregator_frontend.rule=Host(`${URL}`)
+            - traefik.http.services.ofd_agregator_frontend.loadbalancer.server.port=80
+            - traefik.http.routers.ofd_agregator_frontend.entrypoints=web
+            - traefik.http.middlewares.ofd_agregator_frontend.headers.accesscontrolallowmethods=GET,OPTIONS,PUT,POST,DELETE,PATCH
+            - traefik.http.middlewares.ofd_agregator_frontend.headers.accesscontrolalloworigin=origin-list-or-null
+            - traefik.http.middlewares.ofd_agregator_frontend.headers.accesscontrolmaxage=100
+            - traefik.http.middlewares.ofd_agregator_frontend.headers.addvaryheader=true
+        volumes:
+            - ofd_agregator_cms_static:/static-cms/
+            - ofd_agregator_cms_media:/media-cms/
+            - ofd_agregator_backend_statics:/static-agregator/
+            - ofd_agregator_backend_media:/media-agregator/
+        networks:
+            - ofd_agregator_network
+        restart: unless-stopped
+
+volumes:
+    ofd_agregator_cms_psql:
+    ofd_agregator_redis:
+    ofd_agregator_redis_fivestar:
+    ofd_agregator_cms_static:
+    ofd_agregator_cms_media:
+    ofd_agregator_backend_statics:
+    ofd_agregator_backend_media:
+
+networks:
+    ofd_agregator_network:
+        name: ofd_agregator_network
